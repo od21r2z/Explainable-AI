@@ -10,7 +10,7 @@ from matplotlib.patches import Patch
 import matplotlib.dates as mdates
 import matplotlib.colors as mcolors
 import seaborn as sns
-from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score, GridSearchCV
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score, GridSearchCV, RandomizedSearchCV
 from sklearn.metrics import accuracy_score, f1_score, recall_score, precision_score, roc_auc_score
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from sklearn.preprocessing import OneHotEncoder
@@ -35,6 +35,8 @@ import shap
 import lime
 from collections import defaultdict
 from collections import OrderedDict
+from scipy.stats import randint, uniform
+
 
 
 
@@ -119,34 +121,48 @@ def modelSelection(X, y, n_split = 5, random_state = 42):
 
 # writing a function for Hyperparameter tuning
 
-def parameterTuning (X, y, paramGrid, estimator, split = 0.75, scoring = 'f1', n_split = 3, random_state = 42):
+def parameterTuning(X, y, paramGrid, estimator, split=0.75, scoring='f1', n_splits=3, 
+                    random_state=42, useRandomizedSearch=False, n_iter = 50):
     
-    # Split the data set into test and train
+    # Split the data set into training and test sets
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, stratify = y, 
-        train_size = split, 
-        random_state = random_state)
+        X, y, stratify=y, 
+        train_size=split, 
+        random_state=random_state)
     
-    # Strafified Cross Validator
+    # Stratified Cross Validator
     cv = StratifiedKFold(
-        n_splits = n_split,
-        shuffle = True,
-        random_state = random_state
+        n_splits=n_splits,
+        shuffle=True,
+        random_state=random_state
     )
     
-    # Creating Grid Search object
-    gridSearch = GridSearchCV(
-        estimator = estimator,
-        param_grid = paramGrid,
-        cv = cv,
-        scoring = scoring
-    )
+    # If RandomizedSearchCV is used, convert param grid to distributions
+    if useRandomizedSearch:
+        paramDistributions = convert_to_distributions(paramGrid)
+        # Randomized Search object
+        search = RandomizedSearchCV(
+            estimator=estimator,
+            param_distributions=paramDistributions,
+            n_iter=n_iter,  # This can be made an adjustable parameter
+            cv=cv,
+            scoring=scoring,
+            random_state=random_state
+        )
+    else:
+        # Grid Search object
+        search = GridSearchCV(
+            estimator=estimator,
+            param_grid=paramGrid,
+            cv=cv,
+            scoring=scoring
+        )
     
     # Conduct search
-    gridResult = gridSearch.fit(X_train, y_train)
+    searchResult = search.fit(X_train, y_train)
     
     # Get the best parameters
-    bestParams = gridResult.best_params_
+    bestParams = searchResult.best_params_
     
     print(bestParams)
     
@@ -463,3 +479,23 @@ def generateTreeMap(shap_values_storage,X, y, model, modelName, split = 0.75, K 
         
         #show the plot
         plt.show()
+        
+        
+def convert_to_distributions(param_grid):
+    param_distributions = {}
+    for param, values in param_grid.items():
+        if isinstance(values, list):
+            # If the list is of integers, assume the user wants a discrete uniform distribution
+            if all(isinstance(v, int) for v in values):
+                param_distributions[param] = randint(low=min(values), high=max(values) + 1)
+            # If the list is of floats, assume the user wants a continuous uniform distribution
+            elif all(isinstance(v, float) for v in values):
+                param_distributions[param] = uniform(loc=min(values), scale=max(values) - min(values))
+            else:
+                # If it's a mix, or non-numeric, or there are too few values to estimate a distribution
+                # use the list directly as with GridSearchCV
+                param_distributions[param] = values
+        else:
+            # If the value is already a distribution, use it directly
+            param_distributions[param] = values
+    return param_distributions
